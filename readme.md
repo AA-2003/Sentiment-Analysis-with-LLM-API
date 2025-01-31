@@ -41,12 +41,11 @@ Run the script to analyze comments:
 ```sh
 python sentiment_analysis.py
 ```
+or you can use the `sentiment_analysis.py` file as a module in your own project.
 
 The script will process comments using one of the two available methods (single or batch API calls) and output labeled sentiment results.
 
+
+
 ## Contributing
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-

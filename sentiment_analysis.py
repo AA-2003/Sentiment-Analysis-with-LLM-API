@@ -12,19 +12,9 @@ from langchain_core.output_parsers import StrOutputParser
 
 # Load environment variables and prepare balanced dataset for sentiment analysis
 load_dotenv()
-MISTRAL_API_KEY = os.getenv("OPENAI_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 DATA_PATH = os.getenv("DATA_PATH")
 
-data_path = os.getenv("DATA_PATH")
-data = pd.read_csv(data_path)
-data = data[data['description'].notna()]
-
-min_count = data["star"].value_counts().min()
-balanced_df = data.groupby("star").apply(lambda x: x.sample(min_count)).reset_index(drop=True)
-
-balanced_df_comments = balanced_df[(balanced_df['description'].notna())][['description', 'star']]
-comments = balanced_df_comments[balanced_df_comments['description'].apply(lambda x: len(x.split(' '))) > 5].sample(50000)
-print(1)
 # Initialize Mistral AI model and parser
 model = ChatMistralAI(model="mistral-large-latest", api_key=MISTRAL_API_KEY)
 parser = StrOutputParser()
@@ -76,7 +66,6 @@ Now, classify these new sentences:
 
 Return only the sentiment labels in the same order, separated by new lines.
 """
-print(2)
 
 prompt1 = ChatPromptTemplate.from_template(template_for_sentiment)
 chain1 = prompt1 | model | parser
@@ -119,37 +108,19 @@ def classify_batch_with_backoff(sentences, max_retries=5):
     return ["Error"] * len(sentences)
 
 
+def comment_classification(comments, method="single", max_retries=5):
+    '''
+    This function is used to classify comments.
+    method: "single" or "batch"
+    max_retries: number of retries for each batch or comment
+    '''
+    if method == "single":
+        return classify_with_backoff(comments, max_retries) 
+    elif method == "batch":
+        return classify_batch_with_backoff(comments, max_retries)
+    else:
+        raise ValueError(f"Invalid method: {method}")
 
-# Process sample comments for testing
-if 'description' in comments and not comments['description'].empty:
-    for i in comments['description'].sample(min(5, len(comments['description']))).index:
-        sentiment = classify_with_backoff(comments['description'].loc[i])
-        print(f"Sentiment: {sentiment}")
-        print(f"Comment: {comments['description'].loc[i]}")
-        print(f"star: {comments['star'].loc[i]} \n\n")
-else:
-    print("No valid comments found.")
-
-
-# Batch processing configuration and execution
-BATCH_SIZE = 10
-
-# Check if 'description' column exists
-if 'description' in comments and not comments['description'].empty:
-    comments_list = comments['description'].tolist()
-    sentiment_results = []
-
-    # Process in batches
-    for i in range(0, len(comments_list), BATCH_SIZE):
-        batch = comments_list[i:i + BATCH_SIZE]
-        sentiments = classify_batch_with_backoff(batch)
-        sentiment_results.extend(sentiments)
-
-    # Add results to DataFrame
-    comments['sentiment'] = sentiment_results
-else:
-    print("No valid comments found.")
-
-# Print a sample of the updated DataFrame
-print(comments.head())
-comments.to_csv("comments_with_sentiment.csv", index=False)
+if __name__ == "__main__":
+    print(comment_classification("عالی بود", method="single"))
+    print(comment_classification(["عالی بود", "سلام خیلی دیر به دستم رسید", "معمولی بود", "جمع و جور و خوش دست هست"], method="batch"))
