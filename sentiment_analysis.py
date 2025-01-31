@@ -1,25 +1,23 @@
 import os
-import pandas as pd
 import time
 import random
 from httpx import HTTPStatusError
 from langchain.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 from langchain_mistralai import ChatMistralAI
-from langchain_mistralai import MistralAIEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 
 
 # Load environment variables and prepare balanced dataset for sentiment analysis
 load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-DATA_PATH = os.getenv("DATA_PATH")
 
 # Initialize Mistral AI model and parser
 model = ChatMistralAI(model="mistral-large-latest", api_key=MISTRAL_API_KEY)
 parser = StrOutputParser()
 
 # Template for single sentiment classification
+# Note: Examples are in Persian/Farsi language for sentiment analysis
 template_for_sentiment = """
 You are an expert sentiment classifier. Classify the sentence below as "Positive", "Negative", or "Neutral",
 based on the examples provided.
@@ -75,6 +73,14 @@ chain_batch = prompt_batch | model | parser
 
 # Handles single comment classification with exponential backoff retry mechanism
 def classify_with_backoff(comment, max_retries=5):
+    """
+    Classifies a single comment with retry mechanism for rate limiting
+    Args:
+        comment (str): The text to classify
+        max_retries (int): Maximum number of retry attempts
+    Returns:
+        str: Sentiment classification result or "Error"
+    """
     retries = 0
     while retries < max_retries:
         try:
@@ -92,6 +98,14 @@ def classify_with_backoff(comment, max_retries=5):
 
 # Handles batch classification with exponential backoff retry mechanism
 def classify_batch_with_backoff(sentences, max_retries=5):
+    """
+    Classifies multiple sentences in batch with retry mechanism
+    Args:
+        sentences (list): List of texts to classify
+        max_retries (int): Maximum number of retry attempts
+    Returns:
+        list: List of sentiment classifications or "Error" for each input
+    """
     retries = 0
     while retries < max_retries:
         try:
@@ -109,11 +123,15 @@ def classify_batch_with_backoff(sentences, max_retries=5):
 
 
 def comment_classification(comments, method="single", max_retries=5):
-    '''
-    This function is used to classify comments.
-    method: "single" or "batch"
-    max_retries: number of retries for each batch or comment
-    '''
+    """
+    Main classification function that handles both single and batch processing
+    Args:
+        comments (str or list): Input text(s) to classify
+        method (str): "single" for one comment, "batch" for multiple comments
+        max_retries (int): Maximum number of retry attempts
+    Returns:
+        str or list: Sentiment classification result(s)
+    """
     if method == "single":
         return classify_with_backoff(comments, max_retries) 
     elif method == "batch":
