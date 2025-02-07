@@ -1,16 +1,16 @@
 # Sentiment Analysis with LLM API
 
-This repository contains a sentiment analysis implementation using the Mistral AI API through LangChain. It's specifically designed to analyze Persian/Farsi text comments and can classify sentiments as "Positive", "Negative", or "Neutral". The implementation supports:
+This repository contains a sentiment analysis implementation using the Mistral AI API through LangChain. It is designed to analyze Persian/Farsi text comments and classify sentiments as "Positive", "Negative", or "Neutral". The implementation supports:
 
-1. **Single API Call per Comment** - Individual comment analysis
-2. **Batch API Calls** - Multiple comments processed in a single API request
-3. **Customizable Templates** - Ability to modify classification templates for different use cases
+1. **Single Comment Analysis** - Analyze individual comments.
+2. **Batch Comment Analysis** - Process multiple comments in a single API request.
+3. **Customizable Templates** - Modify classification templates for different use cases.
 
 ## Setup
 
 ### Prerequisites
 - Python 3.8+
-- Required packages: langchain, langchain-mistralai, python-dotenv, httpx
+- Required packages: `langchain`, `langchain-mistralai`, `python-dotenv`, `httpx`
 - Mistral AI API key
 
 ### Installation
@@ -47,10 +47,12 @@ analyzer = SentimentAnalyzer()
 
 # Single comment analysis
 result = analyzer.classify("عالی بود", method="single")
+print(result)
 
 # Batch analysis
 comments = ["عالی بود", "سلام خیلی دیر به دستم رسید", "معمولی بود"]
 results = analyzer.classify(comments, method="batch")
+print(results)
 ```
 
 ### Customizing Templates
@@ -59,8 +61,8 @@ You can customize the analysis templates for different use cases:
 ```python
 # Example: Changing to a delivery-focused classification
 new_template = """
-You are an expert sentiment classifier. Classify each sentence below as "True", "False",
-return true if sentence is about delivery, based on the examples provided.
+You are an expert sentiment classifier. Classify each sentence below as "True" or "False",
+indicating whether the sentence is about delivery, based on the examples provided.
 Just answer in one word per sentence.
 
 Examples:
@@ -69,12 +71,16 @@ Sentiment: True
 
 sentence: "خیلی خوش مزه بود"
 Sentiment: False
-...
+
+sentence: "سرویسش خیلی بد بود"
+Sentiment: True
+
+Now, classify this new sentence:
+Text: "{sentence}"
 """
 
 analyzer.update_templates(single_template=new_template)
 print(analyzer.classify('راننده موتورش خیلی بد بود', method='single'))
-
 ```
 
 ### Error Handling
