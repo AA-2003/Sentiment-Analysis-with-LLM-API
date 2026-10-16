@@ -1,4 +1,6 @@
-httpx
-langchain
-python-dotenv
-langchain-mistralai
+httpx>=0.28,<1
+langchain-core>=1,<2
+langchain-mistralai>=1,<2
+python-dotenv>=1,<2
+pandas>=2.2,<3
+emoji>=2,<3

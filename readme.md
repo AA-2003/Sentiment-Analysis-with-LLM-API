@@ -1,90 +1,76 @@
-# Sentiment Analysis with LLM API
+# Persian Sentiment Analysis
 
-This repository contains a sentiment analysis implementation using the Mistral AI API through LangChain. It is designed to analyze Persian/Farsi text comments and classify sentiments as "Positive", "Negative", or "Neutral". The implementation supports:
-
-1. **Single Comment Analysis** - Analyze individual comments.
-2. **Batch Comment Analysis** - Process multiple comments in a single API request.
-3. **Customizable Templates** - Modify classification templates for different use cases.
+Classify Persian reviews as Positive, Negative, or Neutral using
+[Mistral](https://docs.mistral.ai/) and LangChain.
 
 ## Setup
 
-### Prerequisites
-- Python 3.8+
-- Required packages: `langchain`, `langchain-mistralai`, `python-dotenv`, `httpx`
-- Mistral AI API key
+Use Python 3.11 or 3.12.
 
-### Installation
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/yourusername/your-repo.git
-   cd your-repo
-   ```
-2. Create a virtual environment (optional but recommended):
-   ```sh
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
-3. Install dependencies:
-   ```sh
-   pip install -r requirements.txt
-   ```
+```bash
+git clone https://github.com/AA-2003/Sentiment-Analysis-with-LLM-API.git
+cd Sentiment-Analysis-with-LLM-API
+python -m venv .venv
+```
 
-4. Set up your API key:
-   - Create a `.env` file in the root directory
-   - Add your Mistral AI API key:
-     ```sh
-     MISTRAL_API_KEY=your_api_key_here
-     ```
+Activate with `.\.venv\Scripts\Activate.ps1` on Windows or
+`source .venv/bin/activate` on macOS / Linux, then install:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env` and set `MISTRAL_API_KEY`.
+The default model is `mistral-large-latest`; change `MISTRAL_MODEL` or use `--model`.
 
 ## Usage
 
-### Basic Usage
+```bash
+python main.py --text "عالی بود"
+python main.py --file reviews.json
+python main.py --csv data/reviews.csv --column description --output reports/results.csv
+```
+
+The JSON input is an array of review strings. CSV processing makes one request
+per batch (default: 5 reviews). Output files must be new; completed batches
+remain available if a later request fails.
+
 ```python
 from sentiment_analysis import SentimentAnalyzer
 
-# Initialize the analyzer
 analyzer = SentimentAnalyzer()
-
-# Single comment analysis
-result = analyzer.classify("عالی بود", method="single")
-print(result)
-
-# Batch analysis
-comments = ["عالی بود", "سلام خیلی دیر به دستم رسید", "معمولی بود"]
-results = analyzer.classify(comments, method="batch")
-print(results)
+analyzer.classify("عالی بود")
+analyzer.classify(["عالی بود", "دیر رسید", "معمولی بود"], method="batch")
 ```
 
-### Customizing Templates
-You can customize the analysis templates for different use cases:
+Responses are checked for valid labels and the expected number of results.
+HTTP 429, server errors, and connection errors use exponential backoff.
+`max_retries=0` makes one attempt; the default permits five retries.
+Authentication and invalid-request errors are not retried.
+
+Custom templates use `{sentence}` for single inputs or `{sentences}` for batches.
+Pass `labels` when changing categories:
 
 ```python
-# Example: Changing to a delivery-focused classification
-new_template = """
-You are an expert sentiment classifier. Classify each sentence below as "True" or "False",
-indicating whether the sentence is about delivery, based on the examples provided.
-Just answer in one word per sentence.
-
-Examples:
-sentence: "خیلی دیر به دستم رسید"
-Sentiment: True
-
-sentence: "خیلی خوش مزه بود"
-Sentiment: False
-
-sentence: "سرویسش خیلی بد بود"
-Sentiment: True
-
-Now, classify this new sentence:
-Text: "{sentence}"
-"""
-
-analyzer.update_templates(single_template=new_template)
-print(analyzer.classify('راننده موتورش خیلی بد بود', method='single'))
+analyzer.update_templates(
+    single_template='Return True if this review concerns delivery, otherwise False: {sentence}',
+    labels=("True", "False"),
+)
 ```
 
-### Error Handling
-The implementation includes built-in retry mechanisms for rate limiting and API errors, with configurable maximum retry attempts.
+## Data and notebooks
 
-## Contributing
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+`reviews.py` cleans emoji, URLs, punctuation, and digits, removes duplicate
+reviews, and balances star-rating groups with a fixed random seed.
+It preserves the CSV preparation workflow from `ex.ipynb`.
+
+```bash
+python -m pip install -r requirements-dev.txt
+jupyter lab
+python -m unittest discover -s tests -v
+```
+
+`main.ipynb` demonstrates single, batch, and custom-label calls.
+`ex.ipynb` demonstrates preprocessing and CSV classification.
+Both use fixed mock responses by default; set `LIVE = True` to call Mistral.
+Live requests use your account's API quota. Tests and CI make no model API calls.

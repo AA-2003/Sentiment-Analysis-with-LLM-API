@@ -1,203 +1,161 @@
+import json
+import logging
 import os
-import time
+from pathlib import Path
 import random
-from httpx import HTTPStatusError
-from langchain.prompts import ChatPromptTemplate
+import re
+import time
+
 from dotenv import load_dotenv
-from langchain_mistralai import ChatMistralAI
+from httpx import HTTPStatusError, RequestError
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_mistralai import ChatMistralAI
+
+ROOT = Path(__file__).resolve().parent
+LABELS = ("Positive", "Negative", "Neutral")
+LOGGER = logging.getLogger(__name__)
+SINGLE_TEMPLATE = """Classify this Persian review as Positive, Negative, or Neutral.
+Examples: عالی بود -> Positive; خیلی دیر رسید -> Negative; معمولی بود -> Neutral.
+Review: {sentence}
+Return one label only."""
+BATCH_TEMPLATE = """Classify each Persian review as Positive, Negative, or Neutral.
+Examples: عالی بود -> Positive; خیلی دیر رسید -> Negative; معمولی بود -> Neutral.
+Reviews (JSON array): {sentences}
+Return a JSON array of labels, one per review, in the same order."""
+
+
+class SentimentError(RuntimeError):
+    pass
+
+
+class InvalidResponseError(SentimentError):
+    pass
+
 
 class SentimentAnalyzer:
-    def __init__(self):
-        """
-        Initialize the SentimentAnalyzer class.
-        Loads environment variables, initializes the model and parser, and defines templates.
-        """
-        # Load environment variables
-        load_dotenv()
-        self.mistral_api_key = os.getenv("MISTRAL_API_KEY")
-        
-        # Initialize model and parser
-        self.model = ChatMistralAI(model="mistral-large-latest", api_key=self.mistral_api_key)
+    def __init__(self, model_name=None, api_key=None, *, chat_model=None):
+        if chat_model is None:
+            load_dotenv(ROOT / ".env")
+            api_key = (api_key or os.getenv("MISTRAL_API_KEY", "")).strip()
+            if not api_key:
+                raise ValueError("Set MISTRAL_API_KEY in .env or the environment.")
+            model_name = model_name or os.getenv("MISTRAL_MODEL") or "mistral-large-latest"
+            chat_model = ChatMistralAI(
+                model=model_name, api_key=api_key,
+                temperature=0, max_retries=0, timeout=60,
+            )
+        self.model = chat_model
         self.parser = StrOutputParser()
-        
-        # Define templates
-        self._template_for_sentiment = """
-        You are an expert sentiment classifier. Classify the sentence below as "Positive", "Negative", or "Neutral",
-        based on the examples provided.
-        Just answer in one word.
+        self._single_template = SINGLE_TEMPLATE
+        self._batch_template = BATCH_TEMPLATE
+        self._single_labels = LABELS
+        self._batch_labels = LABELS
+        self.chain_single, self.chain_batch = self._build_chains(
+            self._single_template, self._batch_template
+        )
 
-        Examples:
-        sentence: "عالی بود"
-        Sentiment: Positive
+    def _build_chains(self, single_template, batch_template):
+        single = ChatPromptTemplate.from_template(single_template)
+        batch = ChatPromptTemplate.from_template(batch_template)
+        if single.input_variables != ["sentence"]:
+            raise ValueError("Single template must use only {sentence}.")
+        if batch.input_variables != ["sentences"]:
+            raise ValueError("Batch template must use only {sentences}.")
+        return single | self.model | self.parser, batch | self.model | self.parser
 
-        sentence: "سلام خیلی دیر به دستم رسید"
-        Sentiment: Negative
+    def update_templates(self, single_template=None, batch_template=None, *, labels=None):
+        single = self._single_template if single_template is None else single_template
+        batch = self._batch_template if batch_template is None else batch_template
+        if labels is not None:
+            if single_template is None and batch_template is None:
+                raise ValueError("Supply a template when changing its labels.")
+            if isinstance(labels, str):
+                raise ValueError("Labels must be a sequence of distinct nonempty strings.")
+            labels = tuple(labels)
+            if not labels or any(not isinstance(label, str) or not label.strip() for label in labels):
+                raise ValueError("Labels must be nonempty strings.")
+            labels = tuple(label.strip() for label in labels)
+            if len({label.casefold() for label in labels}) != len(labels):
+                raise ValueError("Labels must be distinct.")
+        chains = self._build_chains(single, batch)
+        self._single_template, self._batch_template = single, batch
+        self.chain_single, self.chain_batch = chains
+        if labels is not None:
+            if single_template is not None:
+                self._single_labels = labels
+            if batch_template is not None:
+                self._batch_labels = labels
 
-        sentence: "معمولی بود"
-        Sentiment: Neutral
-
-        sentence: "جمع و جور و خوش دست هست"
-        Sentiment: Positive
-
-        Now, classify this new sentence:
-        "{sentence}"
-        """
-
-        self._template_for_sentiment_batch = """
-        You are an expert sentiment classifier. Classify each sentence below as "Positive", "Negative", or "Neutral",
-        based on the examples provided.
-        Just answer in one word per sentence.
-
-        Examples:
-        sentence: "عالی بود"
-        Sentiment: Positive
-
-        sentence: "سلام خیلی دیر به دستم رسید"
-        Sentiment: Negative
-
-        sentence: "معمولی بود"
-        Sentiment: Neutral
-
-        sentence: "جمع و جور و خوش دست هست"
-        Sentiment: Positive
-
-        Now, classify these new sentences:
-        {sentences}
-
-        Return only the sentiment labels in the same order, separated by new lines.
-        """
-
-        self._initialize_chains()
-
-    def _initialize_chains(self):
-        """
-        Initialize the prompt chains for single and batch sentiment analysis.
-        """
-        self.prompt_single = ChatPromptTemplate.from_template(self._template_for_sentiment)
-        self.chain_single = self.prompt_single | self.model | self.parser
-
-        self.prompt_batch = ChatPromptTemplate.from_template(self._template_for_sentiment_batch)
-        self.chain_batch = self.prompt_batch | self.model | self.parser
-
-    def update_templates(self, single_template=None, batch_template=None):
-        """
-        Update the templates used for sentiment analysis.
-        
-        Args:
-            single_template (str, optional): New template for single comment analysis.
-            batch_template (str, optional): New template for batch analysis.
-        """
-        if single_template is not None:
-            self._template_for_sentiment = single_template
-        if batch_template is not None:
-            self._template_for_sentiment_batch = batch_template
-        
-        # Reinitialize the chains with new templates
-        self._initialize_chains()
-
-    def _classify_with_backoff(self, comment, max_retries=5):
-        """
-        Classifies a single comment with a retry mechanism for rate limiting.
-        
-        Args:
-            comment (str): The comment to classify.
-            max_retries (int): Maximum number of retry attempts.
-        
-        Returns:
-            str: The sentiment classification result.
-        """
-        retries = 0
-        while retries < max_retries:
+    def _invoke(self, chain, payload, max_retries):
+        for attempt in range(max_retries + 1):
             try:
-                response = self.chain_single.invoke({"sentence": comment})
-                return response.strip()
-            except HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    wait_time = 2 ** retries + random.uniform(0, 1)
-                    print(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
-                    time.sleep(wait_time)
-                    retries += 1
-                else:
-                    raise
-        return "Error"
+                return chain.invoke(payload).strip()
+            except HTTPStatusError as error:
+                status = error.response.status_code
+                retryable = status == 429 or 500 <= status < 600
+                message = f"Mistral request failed (HTTP {status})."
+                if status in (401, 403):
+                    message += " Check MISTRAL_API_KEY and account access."
+                elif status == 404:
+                    message += " Check MISTRAL_MODEL and model availability."
+            except RequestError:
+                retryable = True
+                message = "Could not reach Mistral."
+            if not retryable or attempt == max_retries:
+                raise SentimentError(message) from None
+            delay = min(2 ** attempt + random.random(), 30)
+            LOGGER.warning("Mistral request failed; retrying in %.1f seconds.", delay)
+            time.sleep(delay)
 
-    def _classify_batch_with_backoff(self, sentences, max_retries=5):
-        """
-        Classifies multiple sentences in batch with a retry mechanism.
-        
-        Args:
-            sentences (list): List of sentences to classify.
-            max_retries (int): Maximum number of retry attempts.
-        
-        Returns:
-            list: List of sentiment classification results.
-        """
-        retries = 0
-        while retries < max_retries:
-            try:
-                response = self.chain_batch.invoke({"sentences": "\n".join([f"sentence: \"{s}\"" for s in sentences])})
-                return response.strip().split("\n")
-            except HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    wait_time = 2 ** retries + random.uniform(0, 1)
-                    print(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
-                    time.sleep(wait_time)
-                    retries += 1
-                else:
-                    raise
-        return ["Error"] * len(sentences)
+    @staticmethod
+    def _label(value, labels):
+        if isinstance(value, str):
+            value = value.strip().strip("'\"").casefold()
+            mapping = {label.casefold(): label for label in labels}
+            if value in mapping:
+                return mapping[value]
+        raise InvalidResponseError("Model returned a label outside the configured categories.")
+
+    def _batch_labels_from_response(self, response, count):
+        fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", response, re.DOTALL | re.IGNORECASE)
+        if fenced:
+            response = fenced.group(1)
+        try:
+            values = json.loads(response)
+        except json.JSONDecodeError:
+            values = [line.strip() for line in response.splitlines() if line.strip()]
+        if not isinstance(values, list):
+            raise InvalidResponseError("Batch response must be an array of labels.")
+        if len(values) != count:
+            raise InvalidResponseError(f"Expected {count} labels; received {len(values)}.")
+        return [self._label(value, self._batch_labels) for value in values]
 
     def classify(self, comments, method="single", max_retries=5):
-        """
-        Main classification method that handles both single and batch processing.
-        
-        Args:
-            comments (str or list): Input text(s) to classify.
-            method (str): "single" for one comment, "batch" for multiple comments.
-            max_retries (int): Maximum number of retry attempts.
-        
-        Returns:
-            str or list: Sentiment classification result(s).
-        """
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+            raise ValueError("max_retries must be a non-negative integer.")
         if method == "single":
-            return self._classify_with_backoff(comments, max_retries)
-        elif method == "batch":
-            return self._classify_batch_with_backoff(comments, max_retries)
-        else:
-            raise ValueError(f"Invalid method: {method}")
+            if not isinstance(comments, str) or not comments.strip():
+                raise ValueError("Single input must be a nonempty string.")
+            response = self._invoke(self.chain_single, {"sentence": comments}, max_retries)
+            return self._label(response, self._single_labels)
+        if method == "batch":
+            if not isinstance(comments, (list, tuple)):
+                raise ValueError("Batch input must be a list or tuple of strings.")
+            if not comments:
+                return []
+            if any(not isinstance(comment, str) or not comment.strip() for comment in comments):
+                raise ValueError("Each review must be a nonempty string.")
+            response = self._invoke(
+                self.chain_batch,
+                {"sentences": json.dumps(list(comments), ensure_ascii=False)},
+                max_retries,
+            )
+            return self._batch_labels_from_response(response, len(comments))
+        raise ValueError("method must be 'single' or 'batch'.")
+
 
 if __name__ == "__main__":
-    analyzer = SentimentAnalyzer()
-    print(analyzer.classify("عالی بود", method="single"))
-    
-    print(analyzer.classify(
-        ["عالی بود", "سلام خیلی دیر به دستم رسید", "معمولی بود", "جمع و جور و خوش دست هست"],
-        method="batch"
-    ))
+    from main import main
 
-    print(analyzer.classify('راننده موتورش خیلی بد بود', method='single'))
-    print('test new tamplate')
-    # Update single template example
-    new_single_template = """
-    You are an expert sentiment classifier. Classify each sentence below as "True", 'Flase,
-    return true if sentence is about delivery, based on the examples provided.
-    Just answer in one word per sentence.
-
-    Examples:
-    sentence: "خیلی دیر به دستم رسید"
-    Sentiment: True
-
-    sentence: "خیلی خوش مزه بود"
-    Sentiment: False
-
-    sentence: "سرویسش خیلی بد بود"
-    Sentiment: True
-
-    Now, classify this new sentence:
-    Text: "{sentence}"
-    """
-
-    analyzer.update_templates(single_template=new_single_template)
-    print(analyzer.classify('راننده موتورش خیلی بد بود', method='single'))
-
+    main()
